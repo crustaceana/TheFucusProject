@@ -98,3 +98,21 @@ cat("The number of polarised variants is", length(afs_list_homo_outg), "\n")
 # scaf_call = csv_call[, colnames(csv_call)[grepl(pattern = "scaffold12659_12459", x = colnames(csv_call))]]
 # scaf_pop_call = cbind(Pop = csv_call[,2], scaf_call)
 
+get_daf = function(df) {
+  outg_df = df[df$Pop==outg[1], c("Count", "Tot")]
+  if (outg_df[1,1]==outg_df[1,2]) {
+    der_df = df[df$Allele==2, ]
+  } else if (outg_df[2,1]==outg_df[2,2]) {
+    der_df = df[df$Allele==1, ]
+  }
+  return(der_df)
+}
+der_afs = lapply(afs_list_homo_outg, function(x) get_daf(df = x))
+der_afs[[100]]
+
+scafs_der_afs = bind_cols(der_afs)
+der_scaf = colnames(scafs_der_afs)[grepl(pattern = "scaffold", x = colnames(scafs_der_afs))]
+daf_scaf = scafs_der_afs[, which(colnames(scafs_der_afs) %in% der_scaf)]
+daf_scaf[, 1:10]
+fin_daf_scaf = cbind(Pop=scafs_der_afs$Pop, daf_scaf)
+fin_daf_scaf[, 1:5]
