@@ -1,11 +1,11 @@
 ########################
 ######### TODO #########
 # outgroup: KRI and TJA
-# correlation between line1 and line2 derived afs 
+# correlation between lineage1 and lineage2 and on of derived afs 
 
 rm(list = ls())
 .packages = c("ggplot2", "dplyr", "rstan", "tibble", "bayesplot", "purrr", "reshape2", "pracma", "viridis", "data.table",
-              "Cairo", "extrafont", "ggthemes", "bbmle", "svglite", "stringi")
+              "Cairo", "extrafont", "ggthemes", "bbmle", "svglite", "stringi", "optparse")
 .packagesdev = "thomasp85/patchwork"
 # Install CRAN packages (if not already installed)
 .inst <- .packages %in% installed.packages()
@@ -16,101 +16,85 @@ if(length(.packagesdev[!.instdev]) > 0) devtools::install_github(.packagesdev[!.
 lapply(.packages, require, character.only=TRUE)
 lapply(basename(.packagesdev), require, character.only=TRUE)
 
-csv_call = read.csv("data/Clone_GATK_final_loci_mean_inform.csv")
-csv_call[1:5,1:10]
-# colnames(csv_call)[grepl(pattern = "scaffold", colnames(csv_call))] =
-#   paste0(colnames(csv_call)[grepl(pattern = "scaffold", colnames(csv_call))], "_A1")
-colnames(csv_call)[grepl(pattern = "X", colnames(csv_call))] =
-  paste0(colnames(csv_call)[grepl(pattern = "scaffold", colnames(csv_call))], "_A2")
+option_list = list(
+  make_option(c("-C", "--csv"), type="character", default=NULL,
+              help="input CSV genotype table", metavar="character"),
+  make_option(c("-T", "--outxt"), type="character", default=NULL,
+              help="output text file with list of fixed variants in the outgroups", metavar="character"),
+  make_option(c("-O", "--outgroups"), type="character", default=NULL,
+              help="define the name of the outgroup(s)", metavar="character"))
 
-write.csv(x = csv_call, file = "data/Clone_GATK_final_loci_edit.csv", row.names = FALSE)
-csv_call = read.csv("data/Clone_GATK_final_loci_edit.csv")
-csv_call[1:5,1:10]
-data.frame(table(factor(csv_call$Pop)))
-sum(grepl(pattern = "scaffold", x = colnames(csv_call)))/2
-sum(grepl(pattern = "scaffold", x = colnames(csv_call))) * 2
-colSums(csv_call[,-1:-2]) < 16383
+opt_parser = OptionParser(option_list=option_list,
+                          description = "Identify ancestral and derived allele and compare afs between two populations",
+                          epilogue = "Example: Rscript scripts/get_afs.R -C data/Clone_GATK_final_loci_edit.csv -T fixed_var_outgroup.txt -O KRI_sex TJA_sex")
+opt = parse_args(opt_parser)
 
+if (is.null(opt$csv) | is.null(opt$outxt) | is.null(opt$outgroups)) {
+  print_help(opt_parser)
+  stop("All arguments must be supplied.\n", call.=FALSE)
+}
+
+# csv_call = read.csv("data/Clone_GATK_final_loci_edit.csv")
+cat("Reading input", opt$csv, "...\n")
+csv_call = read.csv(opt$csv)
+# csv_call[1:5,1:10]
 ########################
 ######### TEST #########
-file.create("fixed_var_outgroup.txt")
-outg = c("KRI_sex", "TJA_sex")
+# file.create("fixed_var_outgroup.txt")
+dir.create("docs")
+file.create(paste0("docs/", opt$outxt))
+# file.create("docs/max_val_allele1.txt")
+# outg = c("KRI_sex", "TJA_sex")
+outg = strsplit(opt$outgroups, split = " ")[[1]]
 # csv_call = csv_call[,1:10]
-scafID = colnames(csv_call[!grepl(pattern = "Ind|Pop|A2", x = colnames(csv_call))])
-get_daf = function(csv, scaf) {
-  scaf_df = csv[, colnames(csv)[grepl(pattern = scaf, x = colnames(csv))]]
-  scaf_pop_call = cbind(Pop = csv[,2], scaf_df)
-  mean_by_pop = data.frame(table(factor(csv$Pop)),
-                           aggregate(scaf_pop_call, by = list(scaf_pop_call$Pop), FUN = mean)[,3:4])
-  outg_df = mean_by_pop[which(mean_by_pop$Var1 %in% outg), ]
-  if (sum(rowSums(outg_df[,3:4]) == 2) == 2) {
-    line = paste0(scaf, " variant IS FIXED in the outgroups ", outg[1], " and ", outg[2], " with sum = 2")
-    write(line, file = "fixed_var_outgroup.txt", append=TRUE)
-  #   anc_df = data.frame(lapply(mean_by_pop[,3:4], function(x) gsub(pattern = 1, replacement = "ANC", x = x)))
-  #   anc_df = data.frame(lapply(anc_df, function(x) gsub(pattern = 2, replacement = "DER", x = x)))
-  } else if (sum(rowSums(outg_df[,3:4]) == 4) == 2) {
-    line = paste0(scaf, " variant IS FIXED in the outgroups ", outg[1], " and ", outg[2], " with sum = 4")
-    write(line, file = "fixed_var_outgroup.txt", append=TRUE)
-  # } else {
-  #   cat(scaf, "variant is NOT FIXED in the outgroups", outg, "\n")
-  }
-  # return(outg_df)
+
+scaf_id = colnames(csv_call[!grepl(pattern = "Ind|Pop|A2", x = colnames(csv_call))])
+
+# oldtxt = read.table("fixed_var_outgroup.txt")
+# newtxt = read.table("docs/fixed_var_outgroup.txt")
+# scaf_id = setdiff(newtxt$V1, oldtxt$V1)
+
+# get_afs function finds homozygous variants in the outgroups and compute AF
+get_afs = function(csv) {
+  # fl = read.table(file = txt)
+  # fl = read.csv(file = csv)
+  # scaf_id = colnames(csv[!grepl(pattern = "Ind|Pop|A2", x = colnames(csv))])[id_num]
+  # scafID_allele = fl[, c(1, dim(fl)[2])]
+  # colnames(scafID_allele) = c("scaf", "allele_num")
+  # scaf_id = as.character(scafID_allele$scaf)[id_num]
+  # print(scaf_id)
+  id_fix_csv = lapply(scaf_id, function(x) {
+    cat("Calculating frequency of", x, "...\n")
+    one_scaf = csv[, colnames(csv)[grepl(pattern = x, x = colnames(csv))]]
+    one_scaf_pop = cbind(Pop = csv[,2], one_scaf)
+    one_freq_tot = data.frame(table(one_scaf_pop$Pop, one_scaf_pop[, 3]),
+                              Tot = data.frame(table(one_scaf_pop$Pop))[,2])
+    # This part is to double check the values of allele1 #
+    # idx_max_a1 = which.max(one_scaf_pop[, 2])
+    # mx_allele = paste0(x, " variant has allele1 = ", max(one_scaf_pop[, 2]), " and allele2 = ", one_scaf_pop[idx_max_a1, 3])
+    # write(mx_allele, file = "docs/max_val_allele1.txt", append=TRUE)
+    ######################################################
+    one_af = mutate(one_freq_tot, AF = Freq/Tot)
+    colnames(one_af) = c("Pop", "Allele", "Count", "Tot", paste0("AF_", x))
+    # If AF of outgroups is below 1 remove the AF value
+    outg_fr = one_af[which(one_af$Pop %in% outg), dim(one_af)[2]]
+    outg_vc = rep(1,length(outg_fr))
+    outg_filter = outg_vc[outg_fr == 1 | outg_fr == 0]
+    if (sum(outg_filter) == 4) {
+      # Add column to be able to filter out dataframes without the extra column
+      one_af$Homo_outg = 1
+      # Write variant to txt output
+      # line = paste0(x, " variant IS FIXED in the outgroups ", outg[1], " and ", outg[2])
+      # write(line, file = paste0("docs/", opt$outxt), append=TRUE)
+    }
+    return(one_af)
+    })
+  return(id_fix_csv)
 }
-lapply(scafID, function(s) {
-  get_daf(csv = csv_call, scaf = s)
-})
+afs_list = get_afs(csv = csv_call)
+afs_list_homo_outg = Filter(function(x) ncol(x)==6, afs_list)
+cat("The number of polarised variants is", length(afs_list_homo_outg), "\n")
 
-scaf_call = csv_call[, colnames(csv_call)[grepl(pattern = "scaffold6531_5857", x = colnames(csv_call))]]
-scaf_pop_call = cbind(Pop = csv_call[,2], scaf_call)
-head(scaf_pop_call)
-scaf_pop_01 = data.frame(lapply(scaf_pop_call, function(x) gsub(pattern = 2, replacement = 0, x = x)))
-head(scaf_pop_01)
-data.frame(table(scaf_pop_01$Pop, scaf_pop_01$scaffold6531_5857_A2))
-table(scaf_pop_01$Pop)
-aggregate(scaf_pop_01, by = list(scaf_pop_01$Pop), FUN = mean)
-freq_by_pop = data.frame(table(factor(scaf_pop_01$Pop)),
-                         aggregate(scaf_pop_01, by = list(scaf_pop_01$Pop), FUN = mean)[,3:4])
-if (sum(rowSums(outg_df[,3:4]) == 2) == 2) {
-  anc_df = data.frame(lapply(mean_by_pop[,3:4], function(x) gsub(pattern = 1, replacement = "ANC", x = x)))
-  anc_df = data.frame(lapply(anc_df, function(x) gsub(pattern = 2, replacement = "DER", x = x)))
-}
+# scaf_call = csv_call[, colnames(csv_call)[grepl(pattern = "scaffold12659_12459", x = colnames(csv_call))]]
+# scaf_pop_call = cbind(Pop = csv_call[,2], scaf_call)
 
-
-
-str(scaf_pop_call)
-aggregate(scaf_pop_call, by = list(scaf_pop_call$Pop), FUN = mean)
-mean_by_pop = data.frame(table(factor(csv_call$Pop)), aggregate(scaf_pop_call, by = list(scaf_pop_call$Pop), FUN = mean)[,3:4])
-
-outg_df = mean_by_pop[which(mean_by_pop$Var1 %in% outg), ]
-if (sum(rowSums(outg_df[,3:4]) == 2) == 2) {
-  anc_df = data.frame(lapply(mean_by_pop[,3:4], function(x) gsub(pattern = 1, replacement = "ANC", x = x)))
-  anc_df = data.frame(lapply(anc_df, function(x) gsub(pattern = 2, replacement = "DER", x = x)))
-}
-
-vcf_call = read.table("test/data/Clonal_GATK_subvcf.tsv", header = TRUE)
-vcf_call[1:12, 1:12]
-rm_col = c("INFO", "ID", "QUAL", "FILTER", "FORMAT")
-vcf_call = vcf_call[,-which(names(vcf_call) %in% rm_col)]
-
-sapply(vcf_call$FX14KRI.1, function(x) strsplit(as.character(x), split = ":"))
-get_GT = apply(vcf_call[, c(-1:-4)], MARGIN = 2, FUN = function(x) {
-  substr(x, start = 1, stop = 3)
-})
-get_GT[1:5,1:5]
-sex_GT = get_GT[, grepl(pattern = "KRI|TJA|STO|LET", x = colnames(get_GT))]
-colnames(sex_GT)
-sex_GT[1:5,1:5]
-sex_GT = gsub(pattern = "1/1", replacement = 2, x = sex_GT)
-sex_GT = gsub(pattern = "0/1", replacement = 1, x = sex_GT)
-sex_GT = gsub(pattern = "0/0", replacement = 0, x = sex_GT)
-sex_GT = apply(sex_GT, MARGIN = 2, FUN = as.integer)
-rowSums(x = sex_GT, na.rm = TRUE)
-
-clo_GT = get_GT[, !grepl(pattern = "KRI|TJA|STO|LET", x = colnames(get_GT))]
-colnames(clo_GT)
-clo_GT[1:5,1:5]
-clo_GT = gsub(pattern = "1/1", replacement = 2, x = clo_GT)
-clo_GT = gsub(pattern = "0/1", replacement = 1, x = clo_GT)
-clo_GT = gsub(pattern = "0/0", replacement = 0, x = clo_GT)
-clo_GT = apply(clo_GT, MARGIN = 2, FUN = as.integer)
-rowSums(x = clo_GT, na.rm = TRUE)
