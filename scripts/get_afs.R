@@ -181,7 +181,7 @@ cat("There are", length(rownames(all_shared)), "variants that have non-zero freq
 sex_lin = fin_var_by_pop[, colnames(fin_var_by_pop)[grepl(pattern = "sex", x = colnames(fin_var_by_pop))]]
 sex_shared = sex_lin[rowSums(sex_lin > 0) == ncol(sex_lin), ]
 cat("There are", length(rownames(sex_shared)), "variants that have non-zero frequency in the sexual populations.\n")
-cat("The correlation between", colnames(sex_shared)[1], "and", colnames(sex_shared)[2], "frquencies is",
+cat("The correlation between", colnames(sex_shared)[1], "and", colnames(sex_shared)[2], "frequencies is",
     cor(sex_shared[,1], sex_shared[,2]), "\n")
 # plot(sex_shared[,1], sex_shared[,2])
 
