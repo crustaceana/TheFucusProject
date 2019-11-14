@@ -20,6 +20,8 @@ lapply(basename(.packagesdev), require, character.only=TRUE)
 option_list = list(
   make_option(c("-C", "--csv"), type="character", default=NULL,
               help="input CSV genotype table", metavar="character"),
+  make_option(c("-L", "--lineages"), type="character", default=NULL,
+              help="pattern to identify the filename which contains info about lineages", metavar="character"),
   make_option(c("-E", "--extension"), type="character", default=NULL,
               help="which format to save the figures, e.g., .svg or .pdf", metavar="character"),
   make_option(c("-T", "--outxt"), type="character", default=NULL,
@@ -29,7 +31,7 @@ option_list = list(
 
 opt_parser = OptionParser(option_list=option_list,
                           description = "Identify ancestral and derived allele and compare afs between two populations",
-                          epilogue = "Example: Rscript scripts/get_afs.R -C data/Clone_GATK_final_loci_edit.csv -E .svg -O KRI_sex TJA_sex")
+                          epilogue = "Example: Rscript scripts/get_afs.R -C data/Clone_GATK_final_loci_edit.csv -L 6_lineages -E .svg -O KRI_sex TJA_sex")
 opt = parse_args(opt_parser)
 
 if (is.null(opt$csv) | is.null(opt$extension) | is.null(opt$outgroups)) {
@@ -41,8 +43,12 @@ if (is.null(opt$csv) | is.null(opt$extension) | is.null(opt$outgroups)) {
 cat("Reading input", opt$csv, "...\n")
 csv_gt = read.csv(opt$csv)
 # fl_line = list.files(path = "data", pattern = "5_lineages", full.names = TRUE)
-fl_line = list.files(path = "data", pattern = opt$lineages, full.names = TRUE)
-csv_line = read.csv(fl_line)
+if (is.null(opt$lineages)) {
+  csv_all = csv_gt
+} else {
+  fl_line = list.files(path = "data", pattern = opt$lineages, full.names = TRUE)
+  csv_line = read.csv(fl_line)
+}
 if (identical(csv_gt$Pop, csv_line$Pop)) {
   csv_call = cbind(csv_gt[,1:2], Line=csv_line$Line, csv_gt[, 3:ncol(csv_gt)])
 }
