@@ -2,7 +2,7 @@
 ######### NOTES #########
 # run script where data directory is
 # outgroup: KRI and TJA
-# correlation between lineage1 and lineage2 and on of derived afs 
+# correlation between lineage1 and lineage2 and on of derived afs
 
 rm(list = ls())
 .packages = c("ggplot2", "dplyr", "rstan", "tibble", "bayesplot", "purrr", "reshape2", "pracma", "viridis", "data.table",
@@ -29,7 +29,7 @@ option_list = list(
 
 opt_parser = OptionParser(option_list=option_list,
                           description = "Identify ancestral and derived allele and compare afs between two populations",
-                          epilogue = "Example: Rscript scripts/get_afs.R -C data/Clone_GATK_final_loci_edit.csv -T fixed_var_outgroup.txt -O KRI_sex TJA_sex")
+                          epilogue = "Example: Rscript scripts/get_afs.R -C data/Clone_GATK_final_loci_edit.csv -E .svg -O KRI_sex TJA_sex")
 opt = parse_args(opt_parser)
 
 if (is.null(opt$csv) | is.null(opt$extension) | is.null(opt$outgroups)) {
