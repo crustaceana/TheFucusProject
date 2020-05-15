@@ -1,0 +1,349 @@
+2bRAD reference-based analysis
+May 2020 
+Ricardo Pereyra, 
+(modified from Mikhail Matz, https://github.com/z0on/2bRAD_denovo/blob/master/2bRAD_README.txt)
+
+=============================================
+
+# downloading and installing all 2bRAD scripts in $HOME/bin 
+cd
+mkdir bin 
+cd ~/bin 
+# cloning github repositories
+git clone https://github.com/z0on/2bRAD_denovo.git
+#git clone https://github.com/z0on/2bRAD_GATK.git
+# move scripts to ~/bin from sub-directories
+#mv 2bRAD_GATK/* . 
+mv 2bRAD_denovo/* . 
+# remove now-empty directory
+rm -rf 2bRAD_denovo 
+rm -rf 2bRAD_GATK 
+
+# designating all .pl and .py files (perl and python scripts) as executable
+chmod +x *.pl 
+chmod +x *.py
+chmod +x *.R
+
+#====================
+# Genome reference placement
+
+module load picard/v2.18.26
+module load Bowtie2/v2.3.4.3
+module load samtools/v1.9
+module load Bamtools/v2.5.1
+module load Java/v1.8.0_191
+module load Anaconda3/v2018.12 #cutadapt is loaded through Anaconda in our node
+
+
+# We have a fasta file Fucus_SOAP-2.scafSeq.1000.fasta and it lives in the directory: 
+
+/proj/data16/crustaceana/Alice/2bRADs/GATK/
+
+export GENOME_FASTA=/proj/data16/crustaceana/Alice/2bRADs/GATK/Fucus_SOAP-2.scafSeq.1000.fasta
+export GENOME_DICT=/proj/data16/crustaceana/Alice/2bRADs/GATK/Fucus_SOAP-2.scafSeq.1000.dict
+
+
+
+# indexing genome for bowtie2 mapper
+bowtie2-build $GENOME_FASTA $GENOME_FASTA
+
+samtools faidx $GENOME_FASTA
+
+
+## For hard-call genotyping using GATK, with >10x coverage
+export GENOME_DICT=/proj/data16/crustaceana/Alice/2bRADs/GATK/Fucus_SOAP-2.scafSeq.1000.dict
+
+java -jar scripts/CreateSequenceDictionary.jar R=$GENOME_FASTA  O=$GENOME_DICT
+
+
+#==================
+# Step 1: Splitting by barcode and quality-filtering the reads
+
+# Trimming for denovo analysis. 
+scripts/2bRAD_trim_launch.pl fastq sampleID=1 > scripts/trims.sh
+
+#Now, execute the bash script, making it first executable by editing it
+vi scripts/trims.sh 
+
+#Write on the First line : # !/bin/bash, make sure that the path is right, then save and exit
+
+
+#This will now trim the fragments and save them in files with the extensions ".tr0".
+
+sh scripts/trims.sh
+
+# do we have expected number of *.tr0 files created?
+ls -l *.fq | wc -l
+ls -l *.tr0 | wc -l 
+
+
+
+# Trimming poor quality bases off ends:
+>trimse.sh
+for file in *.tr0; do
+echo "cutadapt --format fastq -q 15,15 -m 25 -o ${file/.tr0/}.trim $file > ${file}_trimlog.txt" >> trimse.sh;
+done
+
+Execute the bash script
+
+# do we have expected number of *.trim files created?
+ls -l *.trim | wc -l
+
+
+#==============
+# Mapping reads to reference (reads-derived fake one, or real) and formatting bam files 
+
+# for reference-based: 
+export GENOME_FASTA=/proj/data16/crustaceana/Alice/2bRADs/GATK/Fucus_SOAP-2.scafSeq.1000.fasta
+
+# mapping with --local option, enables clipping of mismatching ends (guards against deletions near ends of RAD tags)
+scripts/2bRAD_bowtie2_launch.pl '\.trim$' $GENOME_FASTA > maps.sge
+ 
+# You can add a multithreading flag (-p 16) to the sge script with:
+sed -i 's/-L 16/-L 16 -p 40/g' maps.sge
+
+vi maps.sge
+
+#Insert the following (Adapt to your specific computer node):
+#$ -cwd
+#$ -q Annotation-2
+#$ -S /bin/bash
+#$ -pe mpi 40
+module load picard/v2.18.26
+module load Bowtie2/v2.3.4.3
+module load Java/v1.8.0_191
+module load Anaconda3/v2018.12
+
+qsub maps.sge
+
+>alignmentRates
+for F in `ls *trim`; do M=`grep -E '^[ATGCN]+$' $F | wc -l | grep -f - maps.sge.e* -A 4 | tail -1 | perl -pe 's/maps\.sge\.e\d+-|% overall alignment rate//g'` ; echo "$F.sam $M">>alignmentRates; done
+
+ls *.sam > sams
+cat sams | wc -l  # number should match number of trim files
+
+#Now remove the .bt2 extension to the sam files
+scripts/AddReadGroups.sh 
+
+# next stage is compressing, sorting and indexing the SAM files, so they become BAM files:
+module load samtools
+>s2b.sh
+for file in *.sam; do
+echo "samtools sort -O bam -o ${file/.sam/}.bam $file && samtools index ${file/.sam/}.bam">>s2b.sh;
+done
+
+#Execute the bash script
+
+
+
+ls *bam | wc -l  # should be the same number as number of trim files
+
+# BAM files are the input into various genotype calling / popgen programs, this is the main interim result of the analysis. Archive them.
+
+#==========================
+
+#        G  A  T  K
+
+# ("hard-call" genotyping, use only for high-coverage data, >10x)
+
+# step one: finding places to realign:
+export GENOME_REF=/proj/data16/crustaceana/Alice/2bRADs/GATK/Fucus_SOAP-2.scafSeq.1000.fasta
+
+#Prep the input file for RealignerTargetCreator:
+ls *.bam > bams
+
+cat bams | perl -pe 's/(\S+)\.bam/java -Xmx5g -jar \scripts\/GenomeAnalysisTK_3_6\.jar -T RealignerTargetCreator -R \$GENOME_REF -I $1\.bam -o $1\.intervals/' >intervals.sge
+
+
+#Then open the file and make sure the paths are correct, and add a header:
+
+#$ -cwd
+#$ -q Annotation-2
+#$ -S /bin/bash
+#$ -pe mpi 5
+ulimit -n 4096
+module load GATK/v4.1.0.0
+module load Java/v1.8.0_191
+module load Anaconda3/v2018.12 
+export GENOME_REF=/proj/data16/crustaceana/Alice/2bRADs/GATK/Fucus_SOAP-2.scafSeq.1000.fasta
+
+qsub intervals.sge #Takes quite a while this step
+
+# did it run for all files? is the number of *.intervals files equal the number of *.bam files?
+ll *.intervals | wc -l
+
+# if not, rerun the chunk above
+
+
+# step two: realigning
+cat bams | perl -pe 's/(\S+)\.bam/java -Xmx5g -jar \scripts\/GenomeAnalysisTK_3_6\.jar -T IndelRealigner -R \$GENOME_REF -targetIntervals $1\.intervals -I $1\.bam -o $1\.real.bam -LOD 0\.4/' >realign.sge
+
+
+#Then open the file and make sure the paths are correct, and add a header:
+
+#$ -cwd
+#$ -q Annotation-2
+#$ -S /bin/bash
+#$ -pe mpi 10 
+module load picard/v2.18.26
+module load Bowtie2/v2.3.4.3
+module load Java/v1.8.0_191
+module load Anaconda3/v2018.12  
+export GENOME_REF=/proj/data16/crustaceana/Alice/2bRADs/GATK/Fucus_SOAP-2.scafSeq.1000.fasta
+
+qsub realign.sge
+
+# did it run for all files? is the number of *.intervals files equal the number of *.bam files?
+ll *.real.bam | wc -l
+
+# if not, rerun the chunk above
+ 
+
+# launching GATK UnifiedGenotyper 
+
+#Step one - merge all the bam files into one file called merged.bam, while keeping the sample information as "read groups"
+
+# First - create an rg.txt file, consisting of one line per file
+# @RG	ID:SAMPLE.fq.trim	SM:SAMPLE.fq.trim	PL:Illumina
+
+# then merge all the bam files:
+vi mergingbams.sge
+
+#$ -cwd
+#$ -q Annotation-2 
+#$ -pe mpi 40
+#$ -S /bin/bash
+ulimit -n 4096
+module load samtools/v1.9
+module load Bamtools/v2.5.1
+
+samtools merge -h rg.txt merged.bam *.real.bam
+
+qsub mergingbams.sge
+
+
+# and index the merged file:
+ulimit -n 4096
+module load samtools/v1.9
+module load Bamtools/v2.5.1
+
+samtools index merged.bam 
+
+
+#Now launch the UnifiedGenotyper
+echo '#!/bin/bash
+#$ -cwd
+#$ -q Annotation-2
+#$ -S /bin/bash
+#$ -pe mpi 40
+ulimit -n 4096
+module load GATK/v4.1.0.0
+module load picard/v2.18.26
+module load Java/v1.8.0_191
+export GENOME_REF=/proj/data16/crustaceana/Alice/2bRADs/GATK/Fucus_SOAP-2.scafSeq.1000.fasta
+java -jar \scripts/GenomeAnalysisTK_3_6.jar -T UnifiedGenotyper \
+-R $GENOME_REF -nt 40 -nct 1 \
+--genotype_likelihoods_model SNP \
+-I merged.bam \
+-o primary.vcf' >uniq2a.sge
+
+qsub uniq2a.sge
+
+
+# renaming samples in the vcf file, to get rid of trim-shmim etc
+cat primary.vcf | perl -pe 's/\.trim//g' | perl -pe 's/^chrom/chr/' | perl -pe 's/\.\///g' >primary.names.vcf 
+
+
+#----------------------------------
+# variant quality score recalibration (VQSR)
+
+# extracting SNPs that are consistently genotyped in replicates and have not too many heterozygotes: making a tab-delimited table of clone (replicate) sample pairs. 
+
+for FILE in `find *Rep.trim -type f`; do echo -e "${FILE%Rep.trim}\t${FILE%.trim}" >> clonepairs.tab
+done #in our case, all replicates are identified by the term "Rep" following the sample name.
+
+vi clonepairs.tab
+
+#Fx14DJU29	Fx14DJU29Rep
+#Fx14DJU64	Fx14DJU64Rep
+#Fx14DJU70	Fx14DJU70Rep
+#Fx14DJU74  	Fx14DJU74Rep
+
+
+# non-parametric quantile-based recalibration a-la de novo pipeline
+
+qlogin -pe mpi 2 -q Annotation-2 
+
+ulimit -n 4096
+module load vcftools/v0.1.16
+
+scripts/replicatesMatch.pl vcf=primary.names.vcf replicates=clonepairs.tab polyonly=1 >vqsr.vcf
+
+scripts/recalibrateSNPs_gatk.pl vcf=primary.names.vcf true=vqsr.vcf >recal.vcf
+
+# your best quality filter setting is the one with maximum "gain"
+
+#---------------
+# Applying filters
+
+# identifying poorly genotyped individuals
+vcftools --vcf recal.vcf --het
+
+# look at number of sites genotyped per individual (4th column): 
+cat out.het 
+
+# see if some samples are much lower in the number of sites than others
+# for example, if you want to remove samples showing less than 40000 sites:
+
+cat out.het | awk '$4<40000' | cut -f 1  > underSequenced
+cat underSequenced
+
+# or remove samples with highly negative F value:
+cat out.het | awk '$5<-0.5' | cut -f 1  > HighFnegative2
+cat HighFnegative2
+
+
+# applying filter and selecting polymorphic biallelic loci genotyped in 90% or more individuals
+# (harsh genotyping rate cutoff is strongly recommended for best quality and to avoid RAD loci affected by null alleles because of mutations in restriction site)
+vcftools --vcf recal.vcf --remove HighFnegative --remove-filtered-all --max-missing 0.9  --min-alleles 2 --max-alleles 2 --recode-INFO-all --recode --out filt
+
+# selecting only polymorphic sites (they all are in denovo pipeline!) and sites with no excess heterozygosity
+
+grep -E "#|0/1|0/0.+1/1|1/1.+0/0" filt.recode.vcf >polymorphs.vcf
+
+scripts/hetfilter.pl vcf=polymorphs.vcf maxhet=0.5 >best.vcf
+
+
+#---------------
+# Final touches
+
+# genotypic match between pairs of replicates (the most telling one is the last one, HetsDiscoveryRate - fraction of correctly called heterozygotes; if it is under 90% perhaps use fuzzy genotyping with ANGSD - see above)	
+scripts/repMatchStats.pl vcf=best.vcf replicates=clonepairs.tab 
+
+# looking at per-individual inbreeding 
+# positive - excess false homozygotes (due to poor coverage); negative - false heterozygotes (possibly lumped paralogs)
+vcftools --vcf best.vcf --het
+cat out.het
+
+# create a file listing clones (and low-site/high-homozygosity individuals, if any) to remove
+cat clonepairs.tab | cut -f 2 >clones2remove
+
+# removing clones and badly genotyped ones
+vcftools --vcf best.vcf --remove clones2remove --recode --recode-INFO-all --out final
+
+# thinning for Fst / PCA / ADMIXTURE  (choosing one SNP per tag with max allele frequency):
+scripts/thinner.pl vcf=final.recode.vcf criterion=maxAF >thinMaxaf.vcf
+
+#Finally, output all kinds of statistics with vcftools:
+vcftools --vcf thinMaxaf.vcf --out Öresund_SNPs --hardy
+vcftools --vcf thinMaxaf.vcf --out Öresund_SNPs --012
+vcftools --vcf thinMaxaf.vcf --out Öresund_SNPs --depth
+vcftools --vcf thinMaxaf.vcf --out Öresund_SNPs --site-mean-depth
+vcftools --vcf thinMaxaf.vcf --out Öresund_SNPs --het
+vcftools --vcf thinMaxaf.vcf --out Öresund_SNPs --missing-indv
+
+#Convert to genepop format to import into Poppr R package. Alternatively, use *.vcf file and import it into R using vcfR package for further analysis
+
+scripts/vcf2genepop.pl vcf=thinMaxaf.vcf pops=K,N,Ho,L,F > Öresund_1.gen
+
+
