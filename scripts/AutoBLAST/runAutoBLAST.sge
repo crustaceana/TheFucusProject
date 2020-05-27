@@ -1,0 +1,13 @@
+#$ -cwd
+#$ -q Annotation-1
+#$ -pe mpi 40
+#$ -S /bin/bash
+
+module load blast/v2.10.0
+
+# Define input files - a reference genome, and a list of SNPs in the format scaffold_position
+INFILE=
+REF=
+THREADS=$NSLOTS
+
+./AutoBLAST.sh -s $INFILE -r $REF -t $THREADS
